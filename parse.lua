@@ -15,9 +15,9 @@ local COMBATLOG_OBJECT_NONE = COMBATLOG_OBJECT_NONE
 local COMBATLOG_OBJECT_TYPE_GUARDIAN = COMBATLOG_OBJECT_TYPE_GUARDIAN
 local COMBATLOG_OBJECT_TYPE_PET = COMBATLOG_OBJECT_TYPE_PET
 
-local MAX_BARS = 10
+local MAX_BARS = 14
 local BAR_HEIGHT = 22
-local WINDOW_WIDTH = 500
+local WINDOW_WIDTH = 450
 local UPDATE_INTERVAL = 1
 local COMBAT_END_TIMER = 5
 
@@ -27,9 +27,153 @@ local LEVEL_ACTORS = "actors"
 local LEVEL_ACTIONS = "actions"
 local LEVEL_DETAILS = "details"
 
--- local METRIC_DMG_IN = "Damage Taken"
--- local METRIC_HEAL_OUT = "Healing"
--- local METRIC_HEAL_IN = "Healing Taken"
+local pretty_time = function(ugly_time)
+	if not ugly_time then return "" end
+	if (ugly_time > 60) then
+		return ("%dm %ds"):format(math.floor(ugly_time / 60), ugly_time % 60)
+	else
+		return ("%ds"):format(ugly_time)
+	end
+end
+
+local pretty_number = function(ugly_number)
+	if not ugly_number then return "" end
+	if (ugly_number >= 1e9) then
+		return ("%.2fb"):format(ugly_number / 1e9)
+	elseif (ugly_number >= 1e6) then
+		return ("%.2fm"):format(ugly_number / 1e6)
+	elseif (ugly_number >= 1e3) then
+		return ("%.2fk"):format(ugly_number / 1e3)
+	else
+		return ("%d"):format(ugly_number)
+	end
+end
+
+local backdrop = {
+	bgFile = [[Interface\Buttons\WHITE8x8]],
+	edgeFile = [[Interface\Buttons\WHITE8x8]],
+	tile = false,
+	tileSize = 0,
+	edgeSize = 1,
+	insets = {
+		left = 0,
+		right = 0,
+		top = 0,
+		bottom = 0
+	},
+}
+
+local gen_backdrop = function(frame, ...)
+	if not frame.SetBackdrop then
+		Mixin(frame, BackdropTemplateMixin)
+	end
+	if ... == nil then
+		frame:SetBackdrop(nil)
+		return
+	end
+	frame:SetBackdrop(backdrop)
+	frame:SetBackdropBorderColor(0, 0, 0, 1)
+	if (...) then
+		frame:SetBackdropColor(...)
+	else
+		frame:SetBackdropColor(.15, .15, .15, 1)
+	end
+end
+
+local gen_string = function(parent, size, flags, font, h_justify, v_justify, name)
+	local string = parent:CreateFontString(name, "OVERLAY")
+	string:SetFont(font or [[Interface\Addons\Parse\fonts\gotham_ultra.ttf]], size or 15, flags or "THINOUTLINE")
+	if h_justify then
+		if h_justify == "MIDDLE" then h_justify = "CENTER" end
+		string:SetJustifyH(h_justify)
+	end
+	if v_justify then
+		if v_justify == "CENTER" then v_justify = "MIDDLE" end
+		string:SetJustifyV(v_justify)
+	end
+	return string
+end
+
+local gen_statusbar = function(parent, w, h, fg_color, bg_color)
+	local bar = CreateFrame("StatusBar", nil, parent, BackdropTemplateMixin and "BackdropTemplate")
+	bar:SetSize(w, h)
+	bar:SetStatusBarTexture([[Interface\Buttons\WHITE8x8]])
+	bar:SetBackdrop(backdrop)
+	bar:GetStatusBarTexture():SetDrawLayer("BORDER", -1);
+	bar:SetBackdropBorderColor(0, 0, 0, 1)
+
+	if fg_color then
+		bar:SetStatusBarColor(unpack(fg_color))
+	end
+
+	if bg_color then
+		bar:SetBackdropColor(unpack(bg_color))
+	else
+		bar:SetBackdropColor(.15, .15, .15, 1)
+	end
+
+	return bar
+end
+
+local update_action_details = function(current, state, parse)
+	local action = state[LEVEL_ACTIONS].context
+
+	-- TODO metrics without detail level
+	if not action.hits then
+		return
+	end
+
+	local i = 1
+	if action.hits[false][false].count + action.hits[false][true].count > 0 then
+		parse.bars[i].name_text:SetText((action.hits[false][false].count + action.hits[false][true].count).." hits")
+		parse.bars[i].description:SetText(pretty_number(action.hits[false][false].total + action.hits[false][true].total))
+		parse.bars[i]:SetValue(1)
+		parse.bars[i]:SetStatusBarColor(.75, .75, .75)
+		parse.bars[i]:Show()
+		i = i + 1
+
+		parse.bars[i].name_text:SetText(string.format("  %d normal", action.hits[false][false].count))
+		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[false][false].lowest), pretty_number(action.hits[false][false].average), pretty_number(action.hits[false][false].highest)))
+		parse.bars[i]:SetValue(1)
+		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
+		parse.bars[i]:Show()
+		i = i + 1
+
+		parse.bars[i].name_text:SetText(string.format("  %d crit", action.hits[false][true].count))
+		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[false][true].lowest), pretty_number(action.hits[false][true].average), pretty_number(action.hits[false][true].highest)))
+		parse.bars[i]:SetValue(1)
+		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
+		parse.bars[i]:Show()
+		i = i + 1
+	end
+
+	if action.hits[true][false].count + action.hits[true][true].count > 0 then
+		parse.bars[i].name_text:SetText((action.hits[true][false].count + action.hits[true][true].count).." ticks")
+		parse.bars[i].description:SetText(pretty_number(action.hits[true][false].total + action.hits[true][true].total))
+		parse.bars[i]:SetValue(1)
+		parse.bars[i]:SetStatusBarColor(.75, .75, .75)
+		parse.bars[i]:Show()
+		i = i + 1
+
+		parse.bars[i].name_text:SetText(string.format("  %d normal", action.hits[true][false].count))
+		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[true][false].lowest), pretty_number(action.hits[true][false].average), pretty_number(action.hits[true][false].highest)))
+		parse.bars[i]:SetValue(1)
+		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
+		parse.bars[i]:Show()
+		i = i + 1
+
+		parse.bars[i].name_text:SetText(string.format("  %d crit", action.hits[true][true].count))
+		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[true][true].lowest), pretty_number(action.hits[true][true].average), pretty_number(action.hits[true][true].highest)))
+		parse.bars[i]:SetValue(1)
+		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
+		parse.bars[i]:Show()
+		i = i + 1
+	end
+
+	for b = i, MAX_BARS do
+		parse.bars[b]:Hide()
+	end
+end
 
 -- metric handlers
 
@@ -39,6 +183,9 @@ local LEVEL_DETAILS = "details"
 	-- value: a function that returns a value that the actor owning the metric should be sorted based on
 		-- params
 			-- metric = an actor's metric specific data
+	-- new: return a new metric data instance for an actor
+	-- actor_list: return the actors of the data segment to rank for this metric (group vs outside)
+	-- entry_list: return the entries listed for each actor (like spells for damage/healing, actors for damage done to)
 	-- handle_combatlog_event: handles a combat log event that matched the metric filter
 		-- params
 			-- self
@@ -55,7 +202,7 @@ local LEVEL_DETAILS = "details"
 -- }
 
 
-local METRIC_DMG_OUT = {
+local METRIC_DMG_DONE = {
 	new_action = function(self, id, name, school)
 		return {
 			id = id,
@@ -123,28 +270,28 @@ local METRIC_DMG_OUT = {
 			actions = {}
 		}
 	end,
-	handle_combatlog_event = function(self, event, source_metric, source_guid, source_flags, target_metric, target_guid, target_flags, ...)
+	actor_list = function(data)
+		return data.group
+	end,
+	entry_list = function(metric_instance)
+		return metric_instance.actions
+	end,
+	update_details = update_action_details,
+	handle_combatlog_event = function(self, event, source_metric, source_guid, _, source_flags, _, target_guid, _, _, ...)
 
-		if not source_guid then
+		if not source_guid or bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 			return false
 		end
 
-		local tick, environmental_type, spell_id, spell_name, spell_school, amount, overkill, school, resisted, blocked, absorbed, critical, glancing, crushing, is_oh
+		local tick, spell_id, spell_name, spell_school, amount, school, critical
 		if string.find(event, "SWING_") then
-			amount, overkill, school, resisted, blocked, absorbed, critical, glancing, crushing, is_oh = ...
-			-- TODO
+			amount, _, school, _, _, _, critical = ...
 			spell_id, spell_name, spell_school = 0, "Auto Attack", school
-		elseif string.find(event, "ENVIRONMENTAL_") then
-			environmental_type, amount, overkill, school, resisted, blocked, absorbed, critical, glancing, crushing, is_oh = ...
-			-- TODO
-			spell_id, spell_name, spell_school = -1, "Environment", school
 		else
-			spell_id, spell_name, spell_school, amount, overkill, school, resisted, blocked, absorbed, critical, glancing, crushing, is_oh = ...
-			--TODO spell, spell_periodic, spell_building
+			spell_id, spell_name, spell_school, amount, _, school, _, _, _, critical = ...
 		end
-		--print(source.name.." damage "..amount.." to "..target.name)
 
-		-- TODO stuff like aoe eye corruption, don't count as dmg done but count dmg taken
+		-- aoe eye corruption etc, don't count as dmg done but count as dmg taken
 		if source_guid == target_guid then
 			return
 		end
@@ -157,7 +304,7 @@ local METRIC_DMG_OUT = {
 
 		local action = source_metric.actions[spell_id]
 		if not action then
-			action = self:new_action(spell_id, spell_name, school)
+			action = self:new_action(spell_id, spell_name, spell_school)
 			source_metric.actions[spell_id] = action
 		end
 
@@ -180,89 +327,309 @@ local METRIC_DMG_OUT = {
 	end
 }
 
-local pretty_time = function(time)
-	if not time then return "" end
-	if (time > 60) then
-		return ("%dm %ds"):format(math.floor(time / 60), time % 60)
-	else
-		return ("%ds"):format(time)
-	end
-end
-
-local pretty_number = function(number)
-	if not number then return "" end
-	if (number >= 1e9) then
-		return ("%.2fb"):format(number / 1e9)
-	elseif (number >= 1e6) then
-		return ("%.2fm"):format(number / 1e6)
-	elseif (number >= 1e3) then
-		return ("%.2fk"):format(number / 1e3)
-	else
-		return ("%d"):format(number)
-	end
-end
-
-local backdrop = {
-	bgFile = [[Interface\Buttons\WHITE8x8]],
-	edgeFile = [[Interface\Buttons\WHITE8x8]],
-	tile = false,
-	tileSize = 0,
-	edgeSize = 1,
-	insets = {
-		left = 0,
-		right = 0,
-		top = 0,
-		bottom = 0
+local METRIC_DMG_DONE_TO = {
+	new_actor = function(self, guid, name)
+		return {
+			guid = guid,
+			name = name,
+			total = 0,
+		}
+	end,
+	label = "Damage Done To",
+	filter = {
+		["SWING_DAMAGE"] = true,
+		["RANGE_DAMAGE"] = true,
+		["SPELL_DAMAGE"] = true,
+		["SPELL_PERIODIC_DAMAGE"] = true,
 	},
+	value = function(metric)
+		return metric.total or 0
+	end,
+	new = function()
+		return {
+			total = 0,
+			actors = {}
+		}
+	end,
+	actor_list = function(data)
+		return data.outside
+	end,
+	entry_list = function(metric_instance)
+		return metric_instance.actors
+	end,
+	update_details = nil,
+	handle_combatlog_event = function(self, event, _, source_guid, source_name, _, target_metric, target_guid, _, target_flags, ...)
+
+		if not target_guid then
+			return false
+		elseif bit.band(target_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
+			return true
+		end
+
+		local amount
+		if string.find(event, "SWING_") then
+			amount = ...
+		else
+			_, _, _, amount = ...
+		end
+
+		if source_guid then
+			local actor = target_metric.actors[source_guid]
+			if not actor then
+				actor = self:new_actor(source_guid, source_name)
+				target_metric.actors[source_guid] = actor
+			end
+			actor.total = actor.total + amount
+			target_metric.total = target_metric.total + amount
+		end
+
+		return true
+	end
 }
 
-local gen_backdrop = function(frame, ...)
-	if not frame.SetBackdrop then
-		Mixin(frame, BackdropTemplateMixin)
-	end
-	frame:SetBackdrop(backdrop)
-	frame:SetBackdropBorderColor(0, 0, 0, 1)
-	if (...) then
-		frame:SetBackdropColor(...)
-	else
-		frame:SetBackdropColor(.15, .15, .15, 1)
-	end
-end
+local METRIC_DMG_TAKEN = {
+	new_action = function(self, id, name, school)
+		return {
+			id = id,
+			name = name,
+			school = school,
+			owner = nil,
+			total = 0,
+			higher = nil,
+			lower = nil,
+			hits = {
+				-- tick
+				[true] = {
+					-- crit
+					[true] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					},
+					-- hit
+					[false] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					}
+				},
+				-- direct
+				[false] = {
+					-- crit
+					[true] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					},
+					-- hit
+					[false] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					}
+				},
+			},
+		}
+	end,
+	label = "Damage Taken",
+	filter = {
+		["SWING_DAMAGE"] = true,
+		["RANGE_DAMAGE"] = true,
+		["SPELL_DAMAGE"] = true,
+		["SPELL_PERIODIC_DAMAGE"] = true,
+		["ENVIRONMENTAL_DAMAGE"] = true,
+	},
+	value = function(metric)
+		return metric.total or 0
+	end,
+	new = function()
+		return {
+			total = 0,
+			actions = {}
+		}
+	end,
+	actor_list = function(data)
+		return data.group
+	end,
+	entry_list = function(metric_instance)
+		return metric_instance.actions
+	end,
+	update_details = update_action_details,
+	handle_combatlog_event = function(self, event, _, _, _, _, target_metric, target_guid, _, target_flags, ...)
 
-local gen_string = function(parent, size, flags, font, h_justify, v_justify, name)
-	local string = parent:CreateFontString(name, "OVERLAY")
-	string:SetFont(font or [[Interface\Addons\Parse\fonts\gotham_ultra.ttf]], size or 15, flags or "THINOUTLINE")
-	if h_justify then
-		if h_justify == "MIDDLE" then h_justify = "CENTER" end
-		string:SetJustifyH(h_justify)
-	end
-	if v_justify then
-		if v_justify == "CENTER" then v_justify = "MIDDLE" end
-		string:SetJustifyV(v_justify)
-	end
-	return string
-end
+		if not target_guid or bit.band(target_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+			return false
+		end
 
-local gen_statusbar = function(parent, w, h, fg_color, bg_color)
-	local bar = CreateFrame("StatusBar", nil, parent, BackdropTemplateMixin and "BackdropTemplate")
-	bar:SetSize(w, h)
-	bar:SetStatusBarTexture([[Interface\Buttons\WHITE8x8]])
-	bar:SetBackdrop(backdrop)
-	bar:GetStatusBarTexture():SetDrawLayer("BORDER", -1);
-	bar:SetBackdropBorderColor(0, 0, 0, 1)
+		local tick, environmental_type, spell_id, spell_name, spell_school, amount, school, critical
+		if string.find(event, "SWING_") then
+			amount, _, school, _, _, _, critical = ...
+			-- TODO
+			spell_id, spell_name, spell_school = 0, "Auto Attack", school
+		elseif string.find(event, "ENVIRONMENTAL_") then
+			environmental_type, amount, _, school, _, _, _, critical = ...
+			-- TODO
+			spell_id, spell_name, spell_school = -1, environmental_type, school
+		else
+			spell_id, spell_name, spell_school, amount, _, school, _, _, _, critical = ...
+		end
 
-	if fg_color then
-		bar:SetStatusBarColor(unpack(fg_color))
+		if string.find(event, "SPELL_PERIODIC") then
+			tick = true
+		else
+			tick = false
+		end
+
+		local action = target_metric.actions[spell_id]
+		if not action then
+			action = self:new_action(spell_id, spell_name, spell_school)
+			target_metric.actions[spell_id] = action
+		end
+
+		local instance = action.hits[tick][critical]
+		instance.count = instance.count + 1
+		instance.total = instance.total + amount
+		instance.average = instance.total / instance.count
+
+		if instance.highest == nil or instance.highest < amount then
+			instance.highest = amount
+		end
+		if instance.lowest == nil or instance.lowest > amount then
+			instance.lowest = amount
+		end
+
+		action.total = action.total + amount
+		target_metric.total = (target_metric.total or 0) + amount
+
+		return true
 	end
+}
 
-	if bg_color then
-		bar:SetBackdropColor(unpack(bg_color))
-	else
-		bar:SetBackdropColor(.15, .15, .15, 1)
+local METRIC_HEAL_DONE = {
+	new_action = function(self, id, name, school)
+		return {
+			id = id,
+			name = name,
+			school = school,
+			owner = nil,
+			total = 0,
+			higher = nil,
+			lower = nil,
+			hits = {
+				-- tick
+				[true] = {
+					-- crit
+					[true] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					},
+					-- hit
+					[false] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					}
+				},
+				-- direct
+				[false] = {
+					-- crit
+					[true] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					},
+					-- hit
+					[false] = {
+						count = 0,
+						highest = nil,
+						lowest = nil,
+						average = 0,
+						total = 0,
+					}
+				},
+			},
+		}
+	end,
+	label = "Healing",
+	filter = {
+		["SPELL_HEAL"] = true,
+		["SPELL_PERIODIC_HEAL"] = true,
+	},
+	value = function(metric)
+		return metric.total or 0
+	end,
+	new = function()
+		return {
+			total = 0,
+			actions = {}
+		}
+	end,
+	actor_list = function(data)
+		return data.group
+	end,
+	entry_list = function(metric_instance)
+		return metric_instance.actions
+	end,
+	update_details = update_action_details,
+	handle_combatlog_event = function(self, event, source_metric, source_guid, source_name, source_flags, target_metric, target_guid, target_name, target_flags, ...)
+
+		if not source_guid or bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+			return false
+		end
+
+		local overhealing, tick, spell_id, spell_name, amount, absorbed, critical, spell_school
+		spell_id, spell_name, spell_school, amount, overhealing, absorbed, critical = ...
+
+		if string.find(event, "SPELL_PERIODIC") then
+			tick = true
+		else
+			tick = false
+		end
+
+		local action = source_metric.actions[spell_id]
+		if not action then
+			-- TODO nil spell_id
+			if not spell_id then
+				print("nil spell_id for source "..(source_name or "nil").." target "..(target_name or "nil").." spell_name "..(spell_name or "nil"))
+				return false
+			end
+			action = self:new_action(spell_id, spell_name, spell_school)
+			source_metric.actions[spell_id] = action
+		end
+
+		local instance = action.hits[tick][critical]
+		instance.count = instance.count + 1
+		instance.total = instance.total + amount
+		instance.average = instance.total / instance.count
+
+		if instance.highest == nil or instance.highest < amount then
+			instance.highest = amount
+		end
+		if instance.lowest == nil or instance.lowest > amount then
+			instance.lowest = amount
+		end
+
+		action.total = action.total + amount
+		source_metric.total = (source_metric.total or 0) + amount
+
+		return false
 	end
-
-	return bar
-end
+}
 
 local update_history = function(current, state, parse)
 	local count = parse.data_history.count
@@ -422,96 +789,59 @@ local update_sorted = function(parse, entries, get_value, segment_start, segment
 	end
 end
 
-local update_details = function(current, state, parse)
-	local action = state[LEVEL_ACTIONS].context
-
-	local i = 1
-	if action.hits[false][false].count + action.hits[false][true].count > 0 then
-		parse.bars[i].name_text:SetText((action.hits[false][false].count + action.hits[false][true].count).." hits")
-		parse.bars[i].description:SetText(pretty_number(action.hits[false][false].total + action.hits[false][true].total))
-		parse.bars[i]:SetValue(1)
-		parse.bars[i]:SetStatusBarColor(.75, .75, .75)
-		parse.bars[i]:Show()
-		i = i + 1
-
-		parse.bars[i].name_text:SetText(string.format("  %d normal", action.hits[false][false].count))
-		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[false][false].lowest), pretty_number(action.hits[false][false].average), pretty_number(action.hits[false][false].highest)))
-		parse.bars[i]:SetValue(1)
-		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
-		parse.bars[i]:Show()
-		i = i + 1
-
-		parse.bars[i].name_text:SetText(string.format("  %d crit", action.hits[false][true].count))
-		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[false][true].lowest), pretty_number(action.hits[false][true].average), pretty_number(action.hits[false][true].highest)))
-		parse.bars[i]:SetValue(1)
-		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
-		parse.bars[i]:Show()
-		i = i + 1
-	end
-
-	if action.hits[true][false].count + action.hits[true][true].count > 0 then
-		parse.bars[i].name_text:SetText((action.hits[true][false].count + action.hits[true][true].count).." ticks")
-		parse.bars[i].description:SetText(pretty_number(action.hits[true][false].total + action.hits[true][true].total))
-		parse.bars[i]:SetValue(1)
-		parse.bars[i]:SetStatusBarColor(.75, .75, .75)
-		parse.bars[i]:Show()
-		i = i + 1
-
-		parse.bars[i].name_text:SetText(string.format("  %d normal", action.hits[true][false].count))
-		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[true][false].lowest), pretty_number(action.hits[true][false].average), pretty_number(action.hits[true][false].highest)))
-		parse.bars[i]:SetValue(1)
-		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
-		parse.bars[i]:Show()
-		i = i + 1
-
-		parse.bars[i].name_text:SetText(string.format("  %d crit", action.hits[true][true].count))
-		parse.bars[i].description:SetText(string.format("%s / %s / %s", pretty_number(action.hits[true][true].lowest), pretty_number(action.hits[true][true].average), pretty_number(action.hits[true][true].highest)))
-		parse.bars[i]:SetValue(1)
-		parse.bars[i]:SetStatusBarColor(.5, .5, .5)
-		parse.bars[i]:Show()
-		i = i + 1
-	end
-
-	for b = i, MAX_BARS do
-		parse.bars[b]:Hide()
-	end
-end
-
 local parse = CreateFrame("Frame", "ParseFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate")
-gen_backdrop(parse, .15, .15, .15, .6)
+--gen_backdrop(parse, .15, .15, .15, .6)
 parse:SetSize(WINDOW_WIDTH, BAR_HEIGHT)
 parse:SetPoint("RIGHT", UIParent, "RIGHT", -5, 0)
 
+parse:SetClampedToScreen(true)
+parse:SetMovable(true)
+parse:SetResizable(true)
+
 parse:SetScript("OnMouseDown", function(self, click)
 	if click == "RightButton" then
+		self:StartSizing("RIGHT")
+	elseif click == "LeftButton" then
+		self:StartMoving()
+	elseif click == "MiddleButton" then
 		self.data_history:clear()
 		self.display_state:clear()
-
 		self.scroll = 1
 		self:update_label()
 		self.display_state:update(self)
 	end
 end)
 
-parse.bg = CreateFrame("Frame", nil, UIParent, BackdropTemplateMixin and "BackdropTemplate")
-gen_backdrop(parse.bg, .15, .15, .15, .6)
-parse.bg:SetSize(WINDOW_WIDTH, BAR_HEIGHT * MAX_BARS)
-parse.bg:SetPoint("TOPLEFT", parse, "BOTTOMLEFT", 0, 1)
+parse:SetScript("OnMouseUp", function(self)
+	self:StopMovingOrSizing()
+end)
 
-parse.label = gen_string(parse, nil, nil, nil, "LEFT")
-parse.label:SetPoint("LEFT", parse, "LEFT", 3, 0)
-parse.label:SetPoint("RIGHT", parse, "RIGHT", -3, 0)
+parse.bg = CreateFrame("Frame", nil, UIParent, BackdropTemplateMixin and "BackdropTemplate")
+--gen_backdrop(parse.bg, .15, .15, .15, .6)
+parse.bg:SetPoint("TOPLEFT", parse, "BOTTOMLEFT", 0, 1)
+parse.bg:SetPoint("TOPRIGHT", parse, "BOTTOMRIGHT", 0, 1)
+parse.bg:SetHeight((BAR_HEIGHT - 1) * MAX_BARS)
 
 parse.count = gen_string(parse, nil, nil, nil, "RIGHT")
 parse.count:SetPoint("RIGHT", parse, "RIGHT", -3, 0)
 
+parse.label = gen_string(parse, nil, nil, nil, "LEFT")
+parse.label:SetPoint("LEFT", parse, "LEFT", 3, 0)
+parse.label:SetPoint("RIGHT", parse.count, "LEFT", -3, 0)
+
+parse:SetScript("OnEnter", function(self)
+	gen_backdrop(self, .15, .15, .15, .6)
+	gen_backdrop(self.bg, .15, .15, .15, .6)
+end)
+
+parse:SetScript("OnLeave", function(self)
+	gen_backdrop(self, nil)
+	gen_backdrop(self.bg, nil)
+end)
+
 parse.scroll = 1
 parse.bars = {}
-parse.event_filter = {
-	-- ["SPELL_HEAL"] = 1,
-	-- ["SPELL_PERIODIC_HEAL"] = 1,
-	-- ["SPELL_ABSORBED"] = 1,
-}
+parse.event_filter = {}
 parse.metrics = {}
 
 parse.add_metric = function(self, metric)
@@ -551,7 +881,7 @@ parse.display_state = {
 	[LEVEL_HISTORY] = {
 		state = LEVEL_HISTORY,
 		up = nil,
-		down = LEVEL_METRIC,
+		down = function() return LEVEL_METRIC end,
 		-- data segment
 		context = nil,
 		update = update_history,
@@ -562,7 +892,7 @@ parse.display_state = {
 	[LEVEL_METRIC] = {
 		state = LEVEL_METRIC,
 		up = LEVEL_HISTORY,
-		down = LEVEL_ACTORS,
+		down = function() return LEVEL_ACTORS end,
 		-- metric
 		context = nil,
 		update = update_metric,
@@ -573,7 +903,7 @@ parse.display_state = {
 	[LEVEL_ACTORS] = {
 		state = LEVEL_ACTORS,
 		up = LEVEL_METRIC,
-		down = LEVEL_ACTIONS,
+		down = function() return LEVEL_ACTIONS end,
 		-- actor
 		context = nil,
 		update = function(self, state, parse)
@@ -581,7 +911,7 @@ parse.display_state = {
 			-- TODO group vs outside
 			update_sorted(
 				parse,
-				segment.group,
+				state[LEVEL_METRIC].context.actor_list(segment),
 				function(actor)
 					return state[LEVEL_METRIC].context.value(actor.metrics[state[LEVEL_METRIC].context.label])
 				end,
@@ -608,13 +938,21 @@ parse.display_state = {
 	[LEVEL_ACTIONS] = {
 		state = LEVEL_ACTIONS,
 		up = LEVEL_ACTORS,
-		down = LEVEL_DETAILS,
+		down = function(state)
+			if state[LEVEL_METRIC].context.update_details then
+				return LEVEL_DETAILS
+			else
+				return false
+			end
+		end,
+		-- action
 		context = nil,
 		update = function(self, state, parse)
 			local segment = state[LEVEL_HISTORY].context
+			local metric_instance = state[LEVEL_ACTORS].context.metrics[state[LEVEL_METRIC].context.label]
 			update_sorted(
 				parse,
-				state[LEVEL_ACTORS].context.metrics[state[LEVEL_METRIC].context.label].actions,
+				state[LEVEL_METRIC].context.entry_list(metric_instance),
 				function(action)
 					return action.total
 				end,
@@ -632,9 +970,13 @@ parse.display_state = {
 	[LEVEL_DETAILS] = {
 		state = LEVEL_DETAILS,
 		up = LEVEL_ACTIONS,
-		down = nil,
+		down = function() return false end,
 		context = nil,
-		update = update_details,
+		update = function(self, state, parse)
+			if state[LEVEL_METRIC].context.update_details then
+				state[LEVEL_METRIC].context.update_details(self, state, parse)
+			end
+		end,
 	},
 	clear = function(self)
 		self.current = self[LEVEL_HISTORY]
@@ -712,9 +1054,9 @@ for i = 1, MAX_BARS do
 	local bar = gen_statusbar(parse, 1, BAR_HEIGHT, {i / 10, i / 10, i / 10}, {0, 0, 0, 0})
 	bar:SetScript("OnMouseDown", function(self, click)
 		if click == "LeftButton" then
-			if parse.display_state.current.down then
+			if parse.display_state.current.down(parse.display_state) then
 				parse.display_state.current.context = self.context
-				parse.display_state.current = parse.display_state[parse.display_state.current.down]
+				parse.display_state.current = parse.display_state[parse.display_state.current.down(parse.display_state)]
 				parse.scroll = 1
 			end
 		elseif click == "RightButton" then
@@ -764,7 +1106,7 @@ local handle_spell_summon = function(self, hide_caster, source_guid, source_name
 		if dest_name then
 			print_str = print_str..": "..dest_name
 		end
-		print(print_str)
+		--print(print_str)
 	end
 end
 
@@ -828,8 +1170,8 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	local sources, targets
 	
 	if bit.band(source_flags, COMBATLOG_OBJECT_SPECIAL_MASK) == COMBATLOG_OBJECT_NONE then
-		print(string.format("event %s empty source for dest: %s %s flags: 0X%8.8X", event, dest_guid, dest_name, dest_flags))
-		return
+		--print(string.format("event %s empty source for dest: %s %s flags: 0X%8.8X", event, dest_guid, dest_name, dest_flags))
+		--return
 	end
 
 	if bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
@@ -891,10 +1233,10 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 					for guid, actor in pairs(sources) do
 						if actor.name == owner_name then
 							if actor.guid then
-								print("found owner by name, guid is: "..actor.guid)
+								--print("found owner by name, guid is: "..actor.guid)
 								owner_guid = actor.guid
 							else
-								print("found owner by name, but guid is nil")
+								--print("found owner by name, but guid is nil")
 								--owner_guid = actor.name
 							end
 						end
@@ -902,7 +1244,7 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 				end
 				if owner_guid then
 					if not sources[owner_guid] then
-						print("owner: "..owner_name.." not found, creating")
+						--print("owner: "..owner_name.." not found, creating")
 						sources[owner_guid] = self:new_actor(owner_guid, owner_name)
 					end
 					source = self:new_actor(source_guid, source_name)
@@ -921,9 +1263,17 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 		source = self:new_actor(nil, "")
 	elseif source.owner then
 		source = source.owner
+		source_guid = source.guid
+		source_name = source.name
 	end
 
+	-- merge by name
 	local target = targets[dest_guid]
+	for guid, candidate in pairs(targets) do
+		if candidate.name == dest_name then
+			target = candidate
+		end
+	end
 
 	if not target and dest_name then
 
@@ -954,7 +1304,8 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	local start_combat
 	for _, handler in ipairs(self.metrics) do
 		if handler.filter[event] then
-			start_combat = start_combat or handler:handle_combatlog_event(event, source.metrics[handler.label], source_guid, source_flags, target.metrics[handler.label], dest_guid, dest_flags, ...)
+			local start_from_event = handler:handle_combatlog_event(event, source.metrics[handler.label], source_guid, source_name, source_flags, target.metrics[handler.label], dest_guid, dest_name, dest_flags, ...)
+			start_combat = start_combat or start_from_event
 		end
 	end
 
@@ -964,7 +1315,7 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 
 		if not self.data_history.active then
 			-- starting combat based off a combat log event happening before any actual combat/encounter event
-			print(event.." started combat: "..source_name.." -> "..dest_name)
+			--print(event.." started combat: "..(source_name and source_name or "?" ).." -> "..dest_name)
 			self:enter_combat(data)
 		end
 		if not data.name then
@@ -992,7 +1343,7 @@ parse.enter_combat = function(self, data, start, name, event)
 	self:SetScript("OnUpdate", self.on_update)
 
 	-- TODO optional change
-	self.display_state[LEVEL_METRIC].context = METRIC_DMG_OUT
+	self.display_state[LEVEL_METRIC].context = METRIC_DMG_DONE
 	self.display_state.current = self.display_state[LEVEL_ACTORS]
 
 	if not data then
@@ -1001,7 +1352,7 @@ parse.enter_combat = function(self, data, start, name, event)
 
 	self.data_history:add(data)
 	self.data_history.active = data
-	print("combat start from event: "..(event or "combatlog"))
+	--print("combat start from event: "..(event or "combatlog"))
 
 	self.display_state[LEVEL_HISTORY].context = data
 
@@ -1014,7 +1365,7 @@ parse.exit_combat = function(self)
 
 	self.data_history.active.combat_end = time()
 	self.data_history.active = nil
-	print("combat end")
+	--print("combat end")
 end
 
 parse.bg:SetScript("OnMouseDown", function(self, click)
@@ -1047,7 +1398,7 @@ parse:SetScript("OnEvent", function(self, event, ...)
 	if event == "COMBAT_LOG_EVENT_UNFILTERED" then
 		self:on_combatlog_event(CombatLogGetCurrentEventInfo())
 	elseif event == "PLAYER_REGEN_ENABLED" then
-		if self.data_history.active.event == "PLAYER_REGEN_DISABLED" then
+		if self.data_history.active and self.data_history.active.event == "PLAYER_REGEN_DISABLED" then
 			self:exit_combat()
 		end
 	elseif event == "PLAYER_REGEN_DISABLED" then
@@ -1066,10 +1417,13 @@ parse:SetScript("OnEvent", function(self, event, ...)
 			self:enter_combat(nil, time(), name, event)
 		end
 	elseif event == "ENCOUNTER_END" then
-		if self.data_history.active.event == "ENCOUNTER_START" then
+		if self.data_history.active and self.data_history.active.event == "ENCOUNTER_START" then
 			self:exit_combat()
 		end
 	end
 end)
 
-parse:add_metric(METRIC_DMG_OUT)
+parse:add_metric(METRIC_DMG_DONE)
+parse:add_metric(METRIC_DMG_DONE_TO)
+parse:add_metric(METRIC_DMG_TAKEN)
+parse:add_metric(METRIC_HEAL_DONE)
