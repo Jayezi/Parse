@@ -1,5 +1,6 @@
 ## Interface: 80300
 ## Title: Parse
 ## Author: Jayeasy
+## SavedVariables: CapturedCombatLog
 
 parse.lua

@@ -23,9 +23,11 @@ local COMBAT_END_TIMER = 5
 
 local LEVEL_HISTORY = "history"
 local LEVEL_METRIC = "metric"
-local LEVEL_ACTORS = "actors"
-local LEVEL_ACTIONS = "actions"
+local LEVEL_ACTOR = "actor"
+local LEVEL_SUMMARY = "summary"
 local LEVEL_DETAILS = "details"
+
+local capturing = false
 
 local pretty_time = function(ugly_time)
 	if not ugly_time then return "" end
@@ -115,8 +117,21 @@ local gen_statusbar = function(parent, w, h, fg_color, bg_color)
 	return bar
 end
 
+local color_actor = function(actor)
+	if actor.guid and string.len(actor.guid) > 0 then
+		local _, class = GetPlayerInfoByGUID(actor.guid)
+		if class then
+			return C_ClassColor.GetClassColor(class)
+		else
+			return {r = .5, g = .5, b = .5}
+		end
+	else
+		return {r = .5, g = .5, b = .5}
+	end
+end
+
 local update_action_details = function(current, state, parse)
-	local action = state[LEVEL_ACTIONS].context
+	local action = state[LEVEL_SUMMARY].context
 
 	-- TODO metrics without detail level
 	if not action.hits then
@@ -175,32 +190,66 @@ local update_action_details = function(current, state, parse)
 	end
 end
 
--- metric handlers
+--[[ metric handler
 
--- {
-	-- label: string that represents the metric on the metric list
-	-- filter: array of combat log event strings mapped to true that this metric handles
-	-- value: a function that returns a value that the actor owning the metric should be sorted based on
-		-- params
-			-- metric = an actor's metric specific data
-	-- new: return a new metric data instance for an actor
-	-- actor_list: return the actors of the data segment to rank for this metric (group vs outside)
-	-- entry_list: return the entries listed for each actor (like spells for damage/healing, actors for damage done to)
-	-- handle_combatlog_event: handles a combat log event that matched the metric filter
-		-- params
-			-- self
-			-- event
-			-- source_metric = metric specific container for the event's source actor
-			-- source_guid
-			-- source_flags
-			-- target_metric = metric specific container for the event's target actor
-			-- target_guid
-			-- target_flags
-			-- ... = the event specific payload from the combat log event
-		-- return
-			-- true if the event would start a new combat segment if none are active, false otherwise
--- }
+local METRIC_NAME = {
 
+	-- string that represents the metric on the metric list
+	label = "Display Name",
+
+	-- array of combat log event strings mapped to true that this metric handles
+	filter = {
+		["EVENT"] = true,
+	},
+
+	-- return a new actor level data object for the metric, include member 'total' as a value to sort by
+	new_actor = function()
+		return {
+			total = 0,
+		}
+	end,
+
+	-- return the actors of the history segment to rank for this metric (group vs outside)
+	actor_list = function(segment)
+		return segment.group
+	end,
+
+	-- return the summary entries each actor (like spells for damage, sources for damage done to)
+	summary_list = function(actor)
+		return actor.actions
+	end,
+
+	-- return a color for the summary entry
+	summary_color = function(summary)
+		return {r = .5, g = .5, b = .5}
+	end,
+
+	-- draw the details level view
+	draw_details = function(
+		current, -- the currently active display state level
+		state, -- the display state
+		parse) -- the window, to access the parse.bars with
+	end,
+
+	-- return true if the event would start a new combat segment
+	handle_combatlog_event = function(
+		self,
+		event,
+		source_metric, -- metric specific container for the event's source actor
+		source_guid,
+		source_name,
+		source_flags,
+		target_metric, -- metric specific container for the event's target actor
+		target_guid,
+		target_name,
+		target_flags,
+		...) -- event specific payload from the combat log event
+
+		return true
+	end
+}
+
+]]
 
 local METRIC_DMG_DONE = {
 	new_action = function(self, id, name, school)
@@ -254,6 +303,7 @@ local METRIC_DMG_DONE = {
 			},
 		}
 	end,
+
 	label = "Damage",
 	filter = {
 		["SWING_DAMAGE"] = true,
@@ -261,22 +311,22 @@ local METRIC_DMG_DONE = {
 		["SPELL_DAMAGE"] = true,
 		["SPELL_PERIODIC_DAMAGE"] = true,
 	},
-	value = function(metric)
-		return metric.total or 0
-	end,
-	new = function()
+	new_actor = function()
 		return {
 			total = 0,
 			actions = {}
 		}
 	end,
-	actor_list = function(data)
-		return data.group
+	actor_list = function(segment)
+		return segment.group
 	end,
-	entry_list = function(metric_instance)
-		return metric_instance.actions
+	summary_list = function(actor)
+		return actor.actions
 	end,
-	update_details = update_action_details,
+	draw_details = update_action_details,
+	summary_color = function(summary)
+		return COMBATLOG_DEFAULT_COLORS.schoolColoring[summary.school]
+	end,
 	handle_combatlog_event = function(self, event, source_metric, source_guid, _, source_flags, _, target_guid, _, _, ...)
 
 		if not source_guid or bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
@@ -328,7 +378,7 @@ local METRIC_DMG_DONE = {
 }
 
 local METRIC_DMG_DONE_TO = {
-	new_actor = function(self, guid, name)
+	new_source = function(self, guid, name)
 		return {
 			guid = guid,
 			name = name,
@@ -342,22 +392,20 @@ local METRIC_DMG_DONE_TO = {
 		["SPELL_DAMAGE"] = true,
 		["SPELL_PERIODIC_DAMAGE"] = true,
 	},
-	value = function(metric)
-		return metric.total or 0
-	end,
-	new = function()
+	new_actor =function()
 		return {
 			total = 0,
-			actors = {}
+			sources = {}
 		}
 	end,
-	actor_list = function(data)
-		return data.outside
+	actor_list = function(segment)
+		return segment.outside
 	end,
-	entry_list = function(metric_instance)
-		return metric_instance.actors
+	summary_list = function(actor)
+		return actor.sources
 	end,
-	update_details = nil,
+	draw_details = nil,
+	summary_color = color_actor,
 	handle_combatlog_event = function(self, event, _, source_guid, source_name, _, target_metric, target_guid, _, target_flags, ...)
 
 		if not target_guid then
@@ -374,10 +422,10 @@ local METRIC_DMG_DONE_TO = {
 		end
 
 		if source_guid then
-			local actor = target_metric.actors[source_guid]
+			local actor = target_metric.sources[source_guid]
 			if not actor then
-				actor = self:new_actor(source_guid, source_name)
-				target_metric.actors[source_guid] = actor
+				actor = self:new_source(source_guid, source_name)
+				target_metric.sources[source_guid] = actor
 			end
 			actor.total = actor.total + amount
 			target_metric.total = target_metric.total + amount
@@ -447,22 +495,22 @@ local METRIC_DMG_TAKEN = {
 		["SPELL_PERIODIC_DAMAGE"] = true,
 		["ENVIRONMENTAL_DAMAGE"] = true,
 	},
-	value = function(metric)
-		return metric.total or 0
-	end,
-	new = function()
+	new_actor =function()
 		return {
 			total = 0,
 			actions = {}
 		}
 	end,
-	actor_list = function(data)
-		return data.group
+	actor_list = function(segment)
+		return segment.group
 	end,
-	entry_list = function(metric_instance)
-		return metric_instance.actions
+	summary_list = function(actor)
+		return actor.actions
 	end,
-	update_details = update_action_details,
+	draw_details = update_action_details,
+	summary_color = function(summary)
+		return COMBATLOG_DEFAULT_COLORS.schoolColoring[summary.school]
+	end,
 	handle_combatlog_event = function(self, event, _, _, _, _, target_metric, target_guid, _, target_flags, ...)
 
 		if not target_guid or bit.band(target_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
@@ -565,37 +613,95 @@ local METRIC_HEAL_DONE = {
 			},
 		}
 	end,
+
+	init = function(self, parse)
+		-- absorb caster needs to be substituted into the event source so it gets added to the correct actor as healing done
+		parse.event_custom_params[self.label] = {
+			["SPELL_ABSORBED"] = function(timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
+				if type(extra[1]) == "number" then
+					--spell
+					source_guid, source_name, source_flags, source_raid_flags = extra[4], extra[5], extra[6], extra[7]
+				else
+					--swing
+					source_guid, source_name, source_flags, source_raid_flags = extra[1], extra[2], extra[3], extra[4]
+				end
+				return timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra
+			end
+		}
+	end,
 	label = "Healing",
 	filter = {
+		["SPELL_ABSORBED"] = true,
 		["SPELL_HEAL"] = true,
 		["SPELL_PERIODIC_HEAL"] = true,
 	},
-	value = function(metric)
-		return metric.total or 0
-	end,
-	new = function()
+	new_actor = function()
 		return {
 			total = 0,
 			actions = {}
 		}
 	end,
-	actor_list = function(data)
-		return data.group
+	actor_list = function(segment)
+		return segment.group
 	end,
-	entry_list = function(metric_instance)
-		return metric_instance.actions
+	summary_list = function(actor)
+		return actor.actions
 	end,
-	update_details = update_action_details,
+	draw_details = update_action_details,
+	summary_color = function(summary)
+		return COMBATLOG_DEFAULT_COLORS.schoolColoring[summary.school]
+	end,
 	handle_combatlog_event = function(self, event, source_metric, source_guid, source_name, source_flags, target_metric, target_guid, target_name, target_flags, ...)
 
 		if not source_guid or bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 			return false
 		end
 
-		local overhealing, tick, spell_id, spell_name, amount, absorbed, critical, spell_school
-		spell_id, spell_name, spell_school, amount, overhealing, absorbed, critical = ...
+		-- heal absorb
+		-- SPELL_HEAL_ABSORBED,Creature-0-3777-2296-5534-165759-000052B696,"Kael'thas Sunstrider",0xa18,0x0,Creature-0-3777-2296-5534-165759-000052B696,"Kael'thas Sunstrider",0xa18,0x0,337859,"Cloak of Flames",0x20,Player-11-0A7C1502,"Shouri-Tichondrius",0x514,0x0,33763,"Lifebloom",0x8,582,582
+		-- SPELL_PERIODIC_HEAL,Player-11-0A7C1502,"Shouri-Tichondrius",0x514,0x0,Creature-0-3777-2296-5534-165759-000052B696,"Kael'thas Sunstrider",0xa18,0x0,33763,"Lifebloom",0x8,Creature-0-3777-2296-5534-165759-000052B696,0000000000000000,8213286,13357590,0,0,1071,806,3,0,100,0,-2286.53,6384.45,1746,6.2274,60,0,582,0,582,nil
 
-		if string.find(event, "SPELL_PERIODIC") then
+		-- SPELL_HEAL_ABSORBED,Creature-0-3777-2296-5534-165759-000052B696,"Kael'thas Sunstrider",0xa18,0x0,Creature-0-3777-2296-5534-165759-000052B696,"Kael'thas Sunstrider",0xa18,0x0,337859,"Cloak of Flames",0x20,Creature-0-3777-2296-5534-165778-000052B77F,"Essence Font",0xa18,0x0,329561,"Essence Overflow",0x20,206683,333940
+		-- SPELL_HEAL,Creature-0-3777-2296-5534-165778-000052B77F,"Essence Font",0xa18,0x0,Creature-0-3777-2296-5534-165759-000052B696,"Kael'thas Sunstrider",0xa18,0x0,329561,"Essence Overflow",0x20,Creature-0-3777-2296-5534-165759-000052B696,0000000000000000,10592567,13357590,0,0,1071,0,3,0,100,0,-2286.53,6384.45,1746,6.2274,60,127257,333940,0,206683,nil
+
+		-- spell absorb
+		-- SPELL_ABSORBED,Creature-0-3132-2296-8243-167406-00003311EB,"Sire Denathrius",0x10a48,0x0,Player-11-078E6E3F,"Sense-Tichondrius",0x514,0x20,326700,"Burden of Sin",0x20,Player-11-0B5F60C3,"Sillaeia-Tichondrius",0x514,0x0,323701,"Mindgames",0x20,2375,2830,nil
+		
+		-- swing absorb
+		-- SPELL_ABSORBED,Creature-0-3132-2296-8243-167406-00003311EB,"Sire Denathrius",0x10a48,0x0,Player-11-078E6E3F,"Sense-Tichondrius",0x514,0x20,Player-11-078E6E3F,"Sense-Tichondrius",0x514,0x20,190456,"Ignore Pain",0x1,57,537,nil
+		-- SPELL_ABSORBED,Creature-0-3132-2296-8243-167406-00003311EB,"Sire Denathrius",0x10a48,0x0,Player-11-078E6E3F,"Sense-Tichondrius",0x514,0x20,Player-11-0B5F60C3,"Sillaeia-Tichondrius",0x514,0x0,114908,"Spirit Shell",0x2,3549,64882,nil
+
+		-- _ABSORBED
+		
+		-- spell absorb
+		-- srcSpellId, srcSpellName, srcSpellSchool, casterGUID, casterName, casterFlags, casterRaidFlags, spellId, spellName, spellSchool, amount
+
+		-- swing absorb
+		-- casterGUID, casterName, casterFlags, casterRaidFlags, spellId, spellName, spellSchool, amount
+
+		-- _HEAL
+		
+		-- spellId, spellName, spellSchool, amount, overhealing, absorbed, critical
+
+
+		local spell_id, spell_name, spell_school, overhealing, tick, amount, absorbed, critical
+
+		if string.find(event, "ABSORBED") then
+			if type(select(1, ...)) == "number" then
+				-- source damage from spell
+				_, _, _, _, _, _, _, spell_id, spell_name, spell_school, amount = ...
+				
+			else
+				-- source damage from swing
+				_, _, _, _, spell_id, spell_name, spell_school, amount = ...
+			end
+			critical = false
+			overhealing = 0
+		else
+			spell_id, spell_name, spell_school, amount, overhealing, absorbed, critical = ...
+		end
+
+		if string.find(event, "PERIODIC") then
 			tick = true
 		else
 			tick = false
@@ -611,6 +717,9 @@ local METRIC_HEAL_DONE = {
 			action = self:new_action(spell_id, spell_name, spell_school)
 			source_metric.actions[spell_id] = action
 		end
+
+		-- TODO overhealing display
+		amount = amount - overhealing
 
 		local instance = action.hits[tick][critical]
 		instance.count = instance.count + 1
@@ -631,7 +740,7 @@ local METRIC_HEAL_DONE = {
 	end
 }
 
-local update_history = function(current, state, parse)
+local draw_history_level = function(current, state, parse)
 	local count = parse.data_history.count
 	for i = 1, MAX_BARS do
 		local first_entry = 1
@@ -665,7 +774,7 @@ local update_history = function(current, state, parse)
 	end
 end
 
-local update_metric = function(current, state, parse)
+local draw_metric_level = function(current, state, parse)
 	local count = #parse.metrics
 	for i = 1, MAX_BARS do
 		local first_entry = 1
@@ -692,7 +801,7 @@ local update_metric = function(current, state, parse)
 	end
 end
 
-local update_sorted = function(parse, entries, get_value, segment_start, segment_end, get_color)
+local draw_sorted = function(parse, entries, get_value, segment_start, segment_end, get_color)
 	local highest_entry, highest_metric = nil, 0
 	local count = 0
 	for key, entry in pairs(entries) do
@@ -804,11 +913,12 @@ parse:SetScript("OnMouseDown", function(self, click)
 	elseif click == "LeftButton" then
 		self:StartMoving()
 	elseif click == "MiddleButton" then
+		self:exit_combat()
 		self.data_history:clear()
 		self.display_state:clear()
 		self.scroll = 1
 		self:update_label()
-		self.display_state:update(self)
+		self.display_state:draw_current_level(self)
 	end
 end)
 
@@ -846,6 +956,9 @@ parse.metrics = {}
 
 parse.add_metric = function(self, metric)
 	table.insert(self.metrics, metric)
+	if metric.init then
+		metric:init(self)
+	end
 	for event in pairs(metric.filter) do
 		self.event_filter[event] = true
 	end
@@ -884,7 +997,7 @@ parse.display_state = {
 		down = function() return LEVEL_METRIC end,
 		-- data segment
 		context = nil,
-		update = update_history,
+		draw = draw_history_level,
 		get_label = function(self)
 			return self.context.timestamp
 		end,
@@ -892,54 +1005,42 @@ parse.display_state = {
 	[LEVEL_METRIC] = {
 		state = LEVEL_METRIC,
 		up = LEVEL_HISTORY,
-		down = function() return LEVEL_ACTORS end,
+		down = function() return LEVEL_ACTOR end,
 		-- metric
 		context = nil,
-		update = update_metric,
+		draw = draw_metric_level,
 		get_label = function(self)
 			return self.context.label
 		end,
 	},
-	[LEVEL_ACTORS] = {
-		state = LEVEL_ACTORS,
+	[LEVEL_ACTOR] = {
+		state = LEVEL_ACTOR,
 		up = LEVEL_METRIC,
-		down = function() return LEVEL_ACTIONS end,
+		down = function() return LEVEL_SUMMARY end,
 		-- actor
 		context = nil,
-		update = function(self, state, parse)
+		draw = function(self, state, parse)
 			local segment = state[LEVEL_HISTORY].context
-			-- TODO group vs outside
-			update_sorted(
+			draw_sorted(
 				parse,
 				state[LEVEL_METRIC].context.actor_list(segment),
 				function(actor)
-					return state[LEVEL_METRIC].context.value(actor.metrics[state[LEVEL_METRIC].context.label])
+					return actor.metrics[state[LEVEL_METRIC].context.label].total
 				end,
 				segment.combat_start,
 				segment.combat_end,
-				function(actor)
-					if actor.guid and string.len(actor.guid) > 0 then
-						local _, class = GetPlayerInfoByGUID(actor.guid)
-						if class then
-							return C_ClassColor.GetClassColor(class)
-						else
-							return {r = .5, g = .5, b = .5}
-						end
-					else
-						return {r = .5, g = .5, b = .5}
-					end
-				end
+				color_actor
 			)
 		end,
 		get_label = function(self)
 			return self.context.name
 		end,
 	},
-	[LEVEL_ACTIONS] = {
-		state = LEVEL_ACTIONS,
-		up = LEVEL_ACTORS,
+	[LEVEL_SUMMARY] = {
+		state = LEVEL_SUMMARY,
+		up = LEVEL_ACTOR,
 		down = function(state)
-			if state[LEVEL_METRIC].context.update_details then
+			if state[LEVEL_METRIC].context.draw_details then
 				return LEVEL_DETAILS
 			else
 				return false
@@ -947,20 +1048,18 @@ parse.display_state = {
 		end,
 		-- action
 		context = nil,
-		update = function(self, state, parse)
+		draw = function(self, state, parse)
 			local segment = state[LEVEL_HISTORY].context
-			local metric_instance = state[LEVEL_ACTORS].context.metrics[state[LEVEL_METRIC].context.label]
-			update_sorted(
+			local actor_summary_data = state[LEVEL_ACTOR].context.metrics[state[LEVEL_METRIC].context.label]
+			draw_sorted(
 				parse,
-				state[LEVEL_METRIC].context.entry_list(metric_instance),
+				state[LEVEL_METRIC].context.summary_list(actor_summary_data),
 				function(action)
 					return action.total
 				end,
 				segment.combat_start,
 				segment.combat_end,
-				function(action)
-					return COMBATLOG_DEFAULT_COLORS.schoolColoring[action.school]
-				end
+				state[LEVEL_METRIC].context.summary_color
 			)
 		end,
 		get_label = function(self)
@@ -969,12 +1068,12 @@ parse.display_state = {
 	},
 	[LEVEL_DETAILS] = {
 		state = LEVEL_DETAILS,
-		up = LEVEL_ACTIONS,
+		up = LEVEL_SUMMARY,
 		down = function() return false end,
 		context = nil,
-		update = function(self, state, parse)
-			if state[LEVEL_METRIC].context.update_details then
-				state[LEVEL_METRIC].context.update_details(self, state, parse)
+		draw = function(self, state, parse)
+			if state[LEVEL_METRIC].context.draw_details then
+				state[LEVEL_METRIC].context.draw_details(self, state, parse)
 			end
 		end,
 	},
@@ -982,12 +1081,12 @@ parse.display_state = {
 		self.current = self[LEVEL_HISTORY]
 		self[LEVEL_HISTORY].context = nil
 		self[LEVEL_METRIC].context = nil
-		self[LEVEL_ACTORS].context = nil
-		self[LEVEL_ACTIONS].context = nil
+		self[LEVEL_ACTOR].context = nil
+		self[LEVEL_SUMMARY].context = nil
 		self[LEVEL_DETAILS].context = nil
 	end,
-	update = function(self, parse)
-		self.current:update(self, parse)
+	draw_current_level = function(self, parse)
+		self.current:draw(self, parse)
 	end
 }
 parse.display_state.current = parse.display_state[LEVEL_HISTORY]
@@ -1067,7 +1166,7 @@ for i = 1, MAX_BARS do
 			end
 		end
 		parse:update_label()
-		parse.display_state:update(parse)
+		parse.display_state:draw_current_level(parse)
 	end)
 
 	bar:SetMinMaxValues(0, 1)
@@ -1086,7 +1185,7 @@ for i = 1, MAX_BARS do
 	parse.bars[i] = bar
 end
 
-local handle_spell_summon = function(self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...)
+local handle_spell_summon = function(self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
 	-- catch summon events and set them up to merge with the owner
 	-- usually spawned with npc/neutral dest_flags but future events from them come with group/pet/friendly source_flags
 	if bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
@@ -1119,10 +1218,12 @@ parse.event_overrides = {
 	["UNIT_DIED"] = handle_unit_died,
 }
 
+parse.event_custom_params = {}
+
 parse.new_actor = function(self, guid, name)
 	local metrics = {}
 	for _, metric in ipairs(self.metrics) do
-		metrics[metric.label] = metric:new()
+		metrics[metric.label] = metric.new_actor()
 	end
 	return {
 		guid = guid,
@@ -1148,19 +1249,25 @@ parse.new_segment = function(self, start, name, event)
 end
 
 parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...)
+	if capturing then
+		table.insert(CapturedCombatLog, {timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...})
+	end
+	local extra = {...}
 
 	if self.event_overrides[event] and self.data_history.active then
-		self.event_overrides[event](self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...)
+		self.event_overrides[event](self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
 		return
 	end
 
 	if not self.event_filter[event] then
 		return
 	end
-	
-	-- TODO same same
-	-- print("timestamp: "..timestamp)
-	-- print("time(): "..time())
+
+	for _, handler in ipairs(self.metrics) do
+		if self.event_custom_params[handler.label] and self.event_custom_params[handler.label][event] then
+			timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra = self.event_custom_params[handler.label][event](timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
+		end
+	end
 
 	local data = self.data_history.active
 	if not data then
@@ -1168,7 +1275,7 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	end
 
 	local sources, targets
-	
+
 	if bit.band(source_flags, COMBATLOG_OBJECT_SPECIAL_MASK) == COMBATLOG_OBJECT_NONE then
 		--print(string.format("event %s empty source for dest: %s %s flags: 0X%8.8X", event, dest_guid, dest_name, dest_flags))
 		--return
@@ -1197,6 +1304,14 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	end
 
 	local source = sources[source_guid]
+
+	-- merge by name
+	for guid, candidate in pairs(sources) do
+		if candidate.name == source_name then
+			source = candidate
+		end
+	end
+
 	if not source and source_name then
 		
 		-- self summon pet
@@ -1267,8 +1382,9 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 		source_name = source.name
 	end
 
-	-- merge by name
 	local target = targets[dest_guid]
+	
+	-- merge by name
 	for guid, candidate in pairs(targets) do
 		if candidate.name == dest_name then
 			target = candidate
@@ -1304,7 +1420,7 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	local start_combat
 	for _, handler in ipairs(self.metrics) do
 		if handler.filter[event] then
-			local start_from_event = handler:handle_combatlog_event(event, source.metrics[handler.label], source_guid, source_name, source_flags, target.metrics[handler.label], dest_guid, dest_name, dest_flags, ...)
+			local start_from_event = handler:handle_combatlog_event(event, source.metrics[handler.label], source_guid, source_name, source_flags, target.metrics[handler.label], dest_guid, dest_name, dest_flags, unpack(extra))
 			start_combat = start_combat or start_from_event
 		end
 	end
@@ -1331,7 +1447,7 @@ parse.on_update = function(self, elapsed)
 		if (self.last_update > UPDATE_INTERVAL) then
 			self.last_update = 0
 
-			self.display_state:update(self)
+			self.display_state:draw_current_level(self)
 			if not self.data_history.active.event and time() - self.data_history.active.last_combat_event > COMBAT_END_TIMER then
 				self:exit_combat()
 			end
@@ -1344,7 +1460,7 @@ parse.enter_combat = function(self, data, start, name, event)
 
 	-- TODO optional change
 	self.display_state[LEVEL_METRIC].context = METRIC_DMG_DONE
-	self.display_state.current = self.display_state[LEVEL_ACTORS]
+	self.display_state.current = self.display_state[LEVEL_ACTOR]
 
 	if not data then
 		data = self:new_segment(start, name, event)
@@ -1362,9 +1478,10 @@ end
 
 parse.exit_combat = function(self)
 	self:SetScript("OnUpdate", nil)
-
-	self.data_history.active.combat_end = time()
-	self.data_history.active = nil
+	if self.data_history.active then
+		self.data_history.active.combat_end = time()
+		self.data_history.active = nil
+	end
 	--print("combat end")
 end
 
@@ -1376,7 +1493,7 @@ parse.bg:SetScript("OnMouseDown", function(self, click)
 		end
 	end
 	parse:update_label()
-	parse.display_state:update(parse)
+	parse.display_state:draw_current_level(parse)
 end)
 
 parse.bg:SetScript("OnMouseWheel", function(self, direction)
@@ -1385,7 +1502,7 @@ parse.bg:SetScript("OnMouseWheel", function(self, direction)
 	else
 		parse.scroll = parse.scroll + 1
 	end
-	parse.display_state:update(parse)
+	parse.display_state:draw_current_level(parse)
 end)
 parse.bg:EnableMouseWheel(1)
 
@@ -1427,3 +1544,33 @@ parse:add_metric(METRIC_DMG_DONE)
 parse:add_metric(METRIC_DMG_DONE_TO)
 parse:add_metric(METRIC_DMG_TAKEN)
 parse:add_metric(METRIC_HEAL_DONE)
+
+SLASH_STOPCOMBATLOG1 = "/stopcombatlog"
+SlashCmdList["STOPCOMBATLOG"] = function()
+	print("stopping")
+	capturing = false
+end
+
+SLASH_CLEARCOMBATLOG1 = "/clearcombatlog"
+SlashCmdList["CLEARCOMBATLOG"] = function()
+	print("clearing")
+	CapturedCombatLog = {}
+end
+
+SLASH_CAPTURECOMBATLOG1 = "/capturecombatlog"
+SlashCmdList["CAPTURECOMBATLOG"] = function()
+	print("capturing")
+	capturing = true
+	CapturedCombatLog = {}
+end
+
+SLASH_REPLAYCOMBATLOG1 = "/replaycombatlog"
+SlashCmdList["REPLAYCOMBATLOG"] = function()
+	print("replaying")
+	capturing = false
+	if CapturedCombatLog then
+		for _, event in ipairs(CapturedCombatLog) do
+			parse:on_combatlog_event(unpack(event))
+		end
+	end
+end
