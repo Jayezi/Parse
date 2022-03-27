@@ -1,4 +1,4 @@
--- A pure combat meter for the Sophisticated, the High Class, the Extraordinairy
+-- A pure combat meter for the Sophisticated, the High Class, the Extraordinairy.
 
 local time = time
 local date = date
@@ -28,6 +28,7 @@ local LEVEL_SUMMARY = "summary"
 local LEVEL_DETAILS = "details"
 
 local capturing = false
+local replay = 1
 
 local pretty_time = function(ugly_time)
 	if not ugly_time then return "" end
@@ -84,7 +85,7 @@ end
 
 local gen_string = function(parent, size, flags, font, h_justify, v_justify, name)
 	local string = parent:CreateFontString(name, "OVERLAY")
-	string:SetFont(font or [[Interface\Addons\Parse\fonts\gotham_ultra.ttf]], size or 15, flags or "THINOUTLINE")
+	string:SetFont(font or [[Interface\Addons\Parse\Media\gotham_ultra.ttf]], size or 15, flags or "THINOUTLINE")
 	if h_justify then
 		if h_justify == "MIDDLE" then h_justify = "CENTER" end
 		string:SetJustifyH(h_justify)
@@ -236,14 +237,8 @@ local METRIC_NAME = {
 		self,
 		event,
 		source_metric, -- metric specific container for the event's source actor
-		source_guid,
-		source_name,
-		source_flags,
 		target_metric, -- metric specific container for the event's target actor
-		target_guid,
-		target_name,
-		target_flags,
-		...) -- event specific payload from the combat log event
+		params) -- event params from the combat log event
 
 		return true
 	end
@@ -327,22 +322,22 @@ local METRIC_DMG_DONE = {
 	summary_color = function(summary)
 		return COMBATLOG_DEFAULT_COLORS.schoolColoring[summary.school]
 	end,
-	handle_combatlog_event = function(self, event, source_metric, source_guid, _, source_flags, _, target_guid, _, _, ...)
+	handle_combatlog_event = function(self, event, source_metric, target_metric, params)
 
-		if not source_guid or bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+		if not params[4] or bit.band(params[6], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 			return false
 		end
 
 		local tick, spell_id, spell_name, spell_school, amount, school, critical
 		if string.find(event, "SWING_") then
-			amount, _, school, _, _, _, critical = ...
+			amount, school, critical = params[12], params[14], params[18]
 			spell_id, spell_name, spell_school = 0, "Auto Attack", school
 		else
-			spell_id, spell_name, spell_school, amount, _, school, _, _, _, critical = ...
+			spell_id, spell_name, spell_school, amount, critical = params[12], params[13], params[14], params[15], params[21]
 		end
 
 		-- aoe eye corruption etc, don't count as dmg done but count as dmg taken
-		if source_guid == target_guid then
+		if params[4] == params[8] then
 			return
 		end
 
@@ -359,6 +354,18 @@ local METRIC_DMG_DONE = {
 		end
 
 		local instance = action.hits[tick][critical]
+
+		if not instance then
+
+			print(tick)
+			print(critical)
+
+			for i, v in pairs(params) do
+				print(i)
+				print(v)
+			end
+		end
+
 		instance.count = instance.count + 1
 		instance.total = instance.total + amount
 		instance.average = instance.total / instance.count
@@ -406,26 +413,26 @@ local METRIC_DMG_DONE_TO = {
 	end,
 	draw_details = nil,
 	summary_color = color_actor,
-	handle_combatlog_event = function(self, event, _, source_guid, source_name, _, target_metric, target_guid, _, target_flags, ...)
+	handle_combatlog_event = function(self, event, source_metric, target_metric, params)
 
-		if not target_guid then
+		if not params[8] then
 			return false
-		elseif bit.band(target_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
+		elseif bit.band(params[10], COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
 			return true
 		end
 
 		local amount
 		if string.find(event, "SWING_") then
-			amount = ...
+			amount = params[12]
 		else
-			_, _, _, amount = ...
+			amount = params[15]
 		end
 
-		if source_guid then
-			local actor = target_metric.sources[source_guid]
+		if params[4] then
+			local actor = target_metric.sources[params[4]]
 			if not actor then
-				actor = self:new_source(source_guid, source_name)
-				target_metric.sources[source_guid] = actor
+				actor = self:new_source(params[4], params[5])
+				target_metric.sources[params[4]] = actor
 			end
 			actor.total = actor.total + amount
 			target_metric.total = target_metric.total + amount
@@ -511,23 +518,21 @@ local METRIC_DMG_TAKEN = {
 	summary_color = function(summary)
 		return COMBATLOG_DEFAULT_COLORS.schoolColoring[summary.school]
 	end,
-	handle_combatlog_event = function(self, event, _, _, _, _, target_metric, target_guid, _, target_flags, ...)
+	handle_combatlog_event = function(self, event, source_metric, target_metric, params)
 
-		if not target_guid or bit.band(target_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+		if not params[8] or bit.band(params[10], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 			return false
 		end
 
 		local tick, environmental_type, spell_id, spell_name, spell_school, amount, school, critical
 		if string.find(event, "SWING_") then
-			amount, _, school, _, _, _, critical = ...
-			-- TODO
+			amount, school, critical = params[12], params[14], params[18]
 			spell_id, spell_name, spell_school = 0, "Auto Attack", school
 		elseif string.find(event, "ENVIRONMENTAL_") then
-			environmental_type, amount, _, school, _, _, _, critical = ...
-			-- TODO
+			environmental_type, amount, school, critical = params[12], params[13], params[15], params[19]
 			spell_id, spell_name, spell_school = -1, environmental_type, school
 		else
-			spell_id, spell_name, spell_school, amount, _, school, _, _, _, critical = ...
+			spell_id, spell_name, spell_school, amount, school, critical = params[12], params[13], params[14], params[15], params[17], params[21]
 		end
 
 		if string.find(event, "SPELL_PERIODIC") then
@@ -617,15 +622,14 @@ local METRIC_HEAL_DONE = {
 	init = function(self, parse)
 		-- absorb caster needs to be substituted into the event source so it gets added to the correct actor as healing done
 		parse.event_custom_params[self.label] = {
-			["SPELL_ABSORBED"] = function(timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
-				if type(extra[1]) == "number" then
+			["SPELL_ABSORBED"] = function(params)
+				if type(params[12]) == "number" then
 					--spell
-					source_guid, source_name, source_flags, source_raid_flags = extra[4], extra[5], extra[6], extra[7]
+					params[4], params[5], params[6], params[7] = params[15], params[16], params[17], params[18]
 				else
 					--swing
-					source_guid, source_name, source_flags, source_raid_flags = extra[1], extra[2], extra[3], extra[4]
+					params[4], params[5], params[6], params[7] = params[12], params[13], params[14], params[15]
 				end
-				return timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra
 			end
 		}
 	end,
@@ -651,9 +655,9 @@ local METRIC_HEAL_DONE = {
 	summary_color = function(summary)
 		return COMBATLOG_DEFAULT_COLORS.schoolColoring[summary.school]
 	end,
-	handle_combatlog_event = function(self, event, source_metric, source_guid, source_name, source_flags, target_metric, target_guid, target_name, target_flags, ...)
+	handle_combatlog_event = function(self, event, source_metric, target_metric, params)
 
-		if not source_guid or bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+		if not params[4] or bit.band(params[6], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 			return false
 		end
 
@@ -687,18 +691,17 @@ local METRIC_HEAL_DONE = {
 		local spell_id, spell_name, spell_school, overhealing, tick, amount, absorbed, critical
 
 		if string.find(event, "ABSORBED") then
-			if type(select(1, ...)) == "number" then
-				-- source damage from spell
-				_, _, _, _, _, _, _, spell_id, spell_name, spell_school, amount = ...
-				
+			if type(params[12]) == "number" then
+				-- source damage is from spell
+				spell_id, spell_name, spell_school, amount = params[19], params[20], params[21], params[22]
 			else
-				-- source damage from swing
-				_, _, _, _, spell_id, spell_name, spell_school, amount = ...
+				-- source damage is from swing
+				spell_id, spell_name, spell_school, amount = params[16], params[17], params[18], params[19]
 			end
 			critical = false
 			overhealing = 0
 		else
-			spell_id, spell_name, spell_school, amount, overhealing, absorbed, critical = ...
+			spell_id, spell_name, spell_school, amount, overhealing, absorbed, critical = params[12], params[13], params[14], params[15], params[16], params[17], params[18]
 		end
 
 		if string.find(event, "PERIODIC") then
@@ -711,7 +714,7 @@ local METRIC_HEAL_DONE = {
 		if not action then
 			-- TODO nil spell_id
 			if not spell_id then
-				print("nil spell_id for source "..(source_name or "nil").." target "..(target_name or "nil").." spell_name "..(spell_name or "nil"))
+				print("nil spell_id for source "..(params[5] or "nil").." target "..(params[9] or "nil").." spell_name "..(spell_name or "nil"))
 				return false
 			end
 			action = self:new_action(spell_id, spell_name, spell_school)
@@ -1185,37 +1188,32 @@ for i = 1, MAX_BARS do
 	parse.bars[i] = bar
 end
 
-local handle_spell_summon = function(self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
+local handle_spell_summon = function(self, params)
 	-- catch summon events and set them up to merge with the owner
 	-- usually spawned with npc/neutral dest_flags but future events from them come with group/pet/friendly source_flags
-	if bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
+	if bit.band(params[6], COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
 		local sources = self.data_history.active.group
 		-- TODO merge same name pets (dire beast etc.)
 		--print(string.format(dest_name.." flags: 0X%8.8X", dest_flags))
-		sources[dest_guid] = self:new_actor(dest_guid, dest_name)
-		if not sources[source_guid] then
-			sources[source_guid] = self:new_actor(source_guid, source_name)
+		sources[params[8]] = self:new_actor(params[8], params[9])
+		if not sources[params[4]] then
+			sources[params[4]] = self:new_actor(params[4], params[5])
 		end
-		sources[dest_guid].owner = sources[source_guid]
+		sources[params[8]].owner = sources[params[4]]
 		local print_str = ""
-		if source_name then
-			print_str = source_name.." "
+		if params[5] then
+			print_str = params[5].." "
 		end
 		print_str = print_str.."summoned"
-		if dest_name then
-			print_str = print_str..": "..dest_name
+		if params[9] then
+			print_str = print_str..": "..params[9]
 		end
 		--print(print_str)
 	end
 end
 
-local handle_unit_died = function(self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name)
-	--print(dest_name.." died")
-end
-
 parse.event_overrides = {
 	["SPELL_SUMMON"] = handle_spell_summon,
-	["UNIT_DIED"] = handle_unit_died,
 }
 
 parse.event_custom_params = {}
@@ -1248,14 +1246,16 @@ parse.new_segment = function(self, start, name, event)
 	}
 end
 
-parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...)
+-- 1=timestamp, 2=event, 3=hide_caster, 4=source_guid, 5=source_name, 6=source_flags, 7=source_raid_flags, 8=dest_guid, 9=dest_name, 10=dest_flags, 11=dest_raid_flags, ...
+parse.on_combatlog_event = function(self, params)
+	local event = params[2]
+
 	if capturing then
-		table.insert(CapturedCombatLog, {timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, ...})
+		table.insert(CapturedCombatLog, params)
 	end
-	local extra = {...}
 
 	if self.event_overrides[event] and self.data_history.active then
-		self.event_overrides[event](self, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
+		self.event_overrides[event](self, params)
 		return
 	end
 
@@ -1265,25 +1265,27 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 
 	for _, handler in ipairs(self.metrics) do
 		if self.event_custom_params[handler.label] and self.event_custom_params[handler.label][event] then
-			timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra = self.event_custom_params[handler.label][event](timestamp, event, hide_caster, source_guid, source_name, source_flags, source_raid_flags, dest_guid, dest_name, dest_flags, dest_raid_flags, extra)
+			self.event_custom_params[handler.label][event](params)
 		end
 	end
 
 	local data = self.data_history.active
 	if not data then
 		data = self:new_segment(time())
+		-- TODO
+		--data = self:new_segment(params[1])
 	end
 
 	local sources, targets
 
-	if bit.band(source_flags, COMBATLOG_OBJECT_SPECIAL_MASK) == COMBATLOG_OBJECT_NONE then
+	if bit.band(params[6], COMBATLOG_OBJECT_SPECIAL_MASK) == COMBATLOG_OBJECT_NONE then
 		--print(string.format("event %s empty source for dest: %s %s flags: 0X%8.8X", event, dest_guid, dest_name, dest_flags))
 		--return
 	end
 
-	if bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+	if bit.band(params[6], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 		-- source is outside group
-		if bit.band(dest_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+		if bit.band(params[10], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 			-- source and target not in group, drop this event
 			return
 		else
@@ -1295,7 +1297,7 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	end
 	--sources = data.group
 
-	if bit.band(dest_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
+	if bit.band(params[10], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID then
 		-- destination is outside group
 		targets = data.outside
 	else
@@ -1303,16 +1305,16 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 		targets = data.group
 	end
 
-	local source = sources[source_guid]
+	local source = sources[params[4]]
 
 	-- merge by name
 	for guid, candidate in pairs(sources) do
-		if candidate.name == source_name then
+		if candidate.name == params[5] then
 			source = candidate
 		end
 	end
 
-	if not source and source_name then
+	if not source and params[5] then
 		
 		-- self summon pet
 		-- SPELL_SUMMON,Player-105-0A15268E,"Jayeasy-Thunderhorn",0x511,0x0,Pet-0-3133-1861-18439-15651-0102CA93DD,"ThomasOMaley",0x1228,0x0,83244,"Call Pet 4",0x1
@@ -1337,12 +1339,12 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 		-- 2114: COMBATLOG_OBJECT_TYPE_GUARDIAN, COMBATLOG_OBJECT_CONTROL_PLAYER, COMBATLOG_OBJECT_REACTION_FRIENDLY, COMBATLOG_OBJECT_AFFILIATION_RAID
 
 		-- if summon event was missed we might need to find the owner and merge a pet here
-		if (bit.band(source_flags, COMBATLOG_OBJECT_TYPE_GUARDIAN) == COMBATLOG_OBJECT_TYPE_GUARDIAN
-				or bit.band(source_flags, COMBATLOG_OBJECT_TYPE_PET) == COMBATLOG_OBJECT_TYPE_PET)
-				and bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
+		if (bit.band(params[6], COMBATLOG_OBJECT_TYPE_GUARDIAN) == COMBATLOG_OBJECT_TYPE_GUARDIAN
+				or bit.band(params[6], COMBATLOG_OBJECT_TYPE_PET) == COMBATLOG_OBJECT_TYPE_PET)
+				and bit.band(params[6], COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
 				
 			-- if guid is nil but name isn't, try to look up the owner by name
-			local owner_guid, owner_name = self.pet_scanner:parse_owner(source_guid)
+			local owner_guid, owner_name = self.pet_scanner:parse_owner(params[4])
 			if owner_name then
 				if not owner_guid then
 					for guid, actor in pairs(sources) do
@@ -1362,54 +1364,54 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 						--print("owner: "..owner_name.." not found, creating")
 						sources[owner_guid] = self:new_actor(owner_guid, owner_name)
 					end
-					source = self:new_actor(source_guid, source_name)
-					sources[source_guid] = source
+					source = self:new_actor(params[4], params[5])
+					sources[params[4]] = source
 					source.owner = sources[owner_guid]
 				end
 			else
 				-- didn't find owner (thing from beyond), keep seperate
 			end
 		else
-			source = self:new_actor(source_guid, source_name)
-			sources[source_guid] = source
+			source = self:new_actor(params[4], params[5])
+			sources[params[4]] = source
 		end
 	end
 	if not source then
 		source = self:new_actor(nil, "")
 	elseif source.owner then
 		source = source.owner
-		source_guid = source.guid
-		source_name = source.name
+		params[4] = source.guid
+		params[5] = source.name
 	end
 
-	local target = targets[dest_guid]
+	local target = targets[params[8]]
 	
 	-- merge by name
 	for guid, candidate in pairs(targets) do
-		if candidate.name == dest_name then
+		if candidate.name == params[9] then
 			target = candidate
 		end
 	end
 
-	if not target and dest_name then
+	if not target and params[9] then
 
 		-- if summon event was missed we might need to find the owner and merge a pet here
-		if (bit.band(dest_flags, COMBATLOG_OBJECT_TYPE_GUARDIAN) == COMBATLOG_OBJECT_TYPE_GUARDIAN
-				or bit.band(dest_flags, COMBATLOG_OBJECT_TYPE_PET) == COMBATLOG_OBJECT_TYPE_PET)
-				and bit.band(dest_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
+		if (bit.band(params[10], COMBATLOG_OBJECT_TYPE_GUARDIAN) == COMBATLOG_OBJECT_TYPE_GUARDIAN
+				or bit.band(params[10], COMBATLOG_OBJECT_TYPE_PET) == COMBATLOG_OBJECT_TYPE_PET)
+				and bit.band(params[10], COMBATLOG_OBJECT_AFFILIATION_MASK) <= COMBATLOG_OBJECT_AFFILIATION_RAID then
 
-			local owner_guid, owner_name = self.pet_scanner:parse_owner(dest_guid)
+			local owner_guid, owner_name = self.pet_scanner:parse_owner(params[8])
 			if owner_guid then
 				if not targets[owner_guid] then
 					targets[owner_guid] = self:new_actor(owner_guid, owner_name)
 				end
-				target = self:new_actor(dest_guid, dest_name)
+				target = self:new_actor(params[8], params[9])
 				target.owner = targets[owner_guid]
 			end
 			-- didn't find owner (thing from beyond), keep seperate
 		else
-			target = self:new_actor(dest_guid, dest_name)
-			targets[dest_guid] = target
+			target = self:new_actor(params[8], params[9])
+			targets[params[8]] = target
 		end
 	end
 
@@ -1420,23 +1422,23 @@ parse.on_combatlog_event = function(self, timestamp, event, hide_caster, source_
 	local start_combat
 	for _, handler in ipairs(self.metrics) do
 		if handler.filter[event] then
-			local start_from_event = handler:handle_combatlog_event(event, source.metrics[handler.label], source_guid, source_name, source_flags, target.metrics[handler.label], dest_guid, dest_name, dest_flags, unpack(extra))
+			local start_from_event = handler:handle_combatlog_event(event, source.metrics[handler.label], target.metrics[handler.label], params)
 			start_combat = start_combat or start_from_event
 		end
 	end
 
 	if start_combat then
 		-- so it can end the segment based on a timer if no actual combat/encounter event started it
-		data.last_combat_event = timestamp
+		data.last_combat_event = params[1]
 
 		if not self.data_history.active then
 			-- starting combat based off a combat log event happening before any actual combat/encounter event
-			--print(event.." started combat: "..(source_name and source_name or "?" ).." -> "..dest_name)
+			--print(event.." started combat: "..(params[5] and params[5] or "?" ).." -> "..dest_name)
 			self:enter_combat(data)
 		end
 		if not data.name then
 			-- give it a name based on a hostile actor if combat started from an event that didn't give a name
-			data.name = bit.band(source_flags, COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID and source_name or dest_name
+			data.name = bit.band(params[6], COMBATLOG_OBJECT_AFFILIATION_MASK) > COMBATLOG_OBJECT_AFFILIATION_RAID and params[5] or params[9]
 		end
 	end
 end
@@ -1513,7 +1515,7 @@ parse:RegisterEvent("ENCOUNTER_START")
 parse:RegisterEvent("ENCOUNTER_END")
 parse:SetScript("OnEvent", function(self, event, ...)
 	if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-		self:on_combatlog_event(CombatLogGetCurrentEventInfo())
+		self:on_combatlog_event({CombatLogGetCurrentEventInfo()})
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		if self.data_history.active and self.data_history.active.event == "PLAYER_REGEN_DISABLED" then
 			self:exit_combat()
@@ -1568,9 +1570,20 @@ SLASH_REPLAYCOMBATLOG1 = "/replaycombatlog"
 SlashCmdList["REPLAYCOMBATLOG"] = function()
 	print("replaying")
 	capturing = false
+	local this_replay = 1
 	if CapturedCombatLog then
-		for _, event in ipairs(CapturedCombatLog) do
-			parse:on_combatlog_event(unpack(event))
+		while this_replay < 200000 do
+			local event = CapturedCombatLog[replay]
+			if not event then
+				replay = 1
+				return
+			end
+			replay = replay + 1
+
+			parse:on_combatlog_event(event)
+
+			this_replay = this_replay + 1
 		end
+
 	end
 end

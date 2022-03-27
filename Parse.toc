@@ -1,6 +1,7 @@
-## Interface: 80300
+## Interface: 90105
 ## Title: Parse
 ## Author: Jayeasy
 ## SavedVariables: CapturedCombatLog
+## OptionalDeps: Focus
 
 parse.lua
