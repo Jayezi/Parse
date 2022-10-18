@@ -1,5 +1,7 @@
 -- A pure combat meter for the Sophisticated, the High Class, the Extraordinairy.
 
+CombatLog_LoadUI()
+
 local time = time
 local date = date
 local bit = bit
