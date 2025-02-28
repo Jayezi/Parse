@@ -1698,41 +1698,43 @@ parse:add_metric(METRIC_DMG_DONE_TO)
 parse:add_metric(METRIC_DMG_TAKEN)
 parse:add_metric(METRIC_HEAL_DONE)
 
-FocusAddMenuOption("Stop Capture", function()
-	print("stopping")
-	capturing = false
-end)
+if FocusAddMenuOption then
+	FocusAddMenuOption("Stop Capture", function()
+		print("stopping")
+		capturing = false
+	end)
 
-FocusAddMenuOption("Clear Capture", function()
-	print("clearing")
-	capturing = false
-	CapturedCombatLog = {}
-end)
+	FocusAddMenuOption("Clear Capture", function()
+		print("clearing")
+		capturing = false
+		CapturedCombatLog = {}
+	end)
 
-FocusAddMenuOption("Start Capture", function()
-	print("capturing")
-	capturing = true
-	CapturedCombatLog = {}
-end)
+	FocusAddMenuOption("Start Capture", function()
+		print("capturing")
+		capturing = true
+		CapturedCombatLog = {}
+	end)
 
-FocusAddMenuOption("Replay Capture", function()
-	print("replaying")
-	capturing = false
-	local this_replay = 1
-	if CapturedCombatLog then
-		while this_replay < 200000 do
-			local event = CapturedCombatLog[replay]
-			if not event then
-				replay = 1
-				pet_scanner.scanned = {}
-				return
+	FocusAddMenuOption("Replay Capture", function()
+		print("replaying")
+		capturing = false
+		local this_replay = 1
+		if CapturedCombatLog then
+			while this_replay < 200000 do
+				local event = CapturedCombatLog[replay]
+				if not event then
+					replay = 1
+					pet_scanner.scanned = {}
+					return
+				end
+				replay = replay + 1
+
+				parse:on_combatlog_event(event)
+
+				this_replay = this_replay + 1
 			end
-			replay = replay + 1
-
-			parse:on_combatlog_event(event)
-
-			this_replay = this_replay + 1
+			print("partial replay")
 		end
-		print("partial replay")
-	end
-end)
+	end)
+end
